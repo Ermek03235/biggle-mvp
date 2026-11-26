@@ -3,6 +3,7 @@ import json
 import math
 import os
 import queue
+import random
 import sys
 import threading
 import time
@@ -14,7 +15,7 @@ from urllib.request import Request, urlopen
 
 SKINS = {"Облачко": "#b4cbe9", "Шарф": "#e28c67", "Звездочёт": "#9095dc"}
 MOODS = {"Спокойный": "Давай без спешки.", "Деловой": "К делу.", "Игривый": "Ловлю мысль!"}
-DEFAULT = dict(skin="Шарф", mood="Спокойный", task="", step="", note="")
+DEFAULT = dict(skin="Облачко", mood="Спокойный", task="", step="", note="")
 PROFILE = Path(os.getenv("LOCALAPPDATA") or Path.home()) / "Beagle" / "profile.json"
 INK, PAPER, MUTED = "#243349", "#fff8ea", "#657585"
 
@@ -61,23 +62,16 @@ def model_reply(model, state, history):
     return reply
 
 
-def ghost(c, x, y, skin, phase, tea=False):
-    """Draw the same character in the room and on the desktop."""
-    y += math.sin(phase) * (2 if tea else 7)
+def ghost(c, x, y, skin, phase, sprite, tea=False):
+    c.create_image(x, y, image=sprite, tags="ghost")
     def poly(points, color):
         c.create_polygon(*[v + (x if i % 2 == 0 else y) for i, v in enumerate(points)],
                          fill=color, smooth=True, splinesteps=24, tags="ghost")
     def oval(a, b, d, e, color):
         c.create_oval(x+a, y+b, x+d, y+e, fill=color, outline="", tags="ghost")
-    poly([-43,20,-42,-13,-30,-38,-4,-46,23,-40,39,-26,43,-3,46,20,54,35,36,37,24,29,12,43,-2,32,-17,42,-26,31,-48,39], "#e7f5ed")
-    oval(-30,-8,-16,0,"#f4bfae")
-    oval(15,-8,29,0,"#f4bfae")
-    for a in (-19, 9):
-        oval(a,-16,a+7,-14 if int(phase*3)%37==0 else -5,INK)
-    c.create_arc(x-6,y-12,x+6,y+1,start=205,extent=130,style="arc",outline=INK,width=2,tags="ghost")
     if skin == "Звездочёт":
-        poly([-40,-29,-11,-33,-20,-78,9,-58,25,-35,37,-29,6,-23], SKINS[skin])
-        oval(-17,-67,-10,-60,"#f7df99")
+        poly([-40,-40,-18,-47,-20,-80,9,-68,25,-48,34,-44,8,-36], SKINS[skin])
+        oval(-16,-72,-9,-65,"#f7df99")
     elif skin == "Шарф":
         poly([-39,7,-22,13,18,11,38,4,38,16,8,23,-22,21,-40,17],SKINS[skin])
         poly([13,18,28,14,38,39,22,35],SKINS[skin])
@@ -90,35 +84,21 @@ def ghost(c, x, y, skin, phase, tea=False):
             c.create_line(x+22+offset,y+6-lift,x+19+offset,y-lift,x+25+offset,y-8-lift,smooth=True,fill="#cbd9d5",tags="ghost")
 
 
-def room(c):
-    c.create_rectangle(0,0,360,440,fill="#29384f",outline="")
-    c.create_rectangle(28,22,170,145,fill="#465d80",outline="#c39770",width=6)
-    c.create_oval(53,37,87,71,fill="#f9dea4",outline="")
-    for x,y in [(46,84),(96,69),(140,40),(129,100),(66,117),(150,82)]:
-        c.create_oval(x,y,x+3,y+3,fill="#e5dfbf",outline="")
-    c.create_line(98,24,98,143,fill="#c39770",width=4)
-    c.create_line(28,96,170,96,fill="#c39770",width=4)
-    c.create_rectangle(0,269,360,440,fill="#906957",outline="")
-    c.create_oval(27,294,332,367,fill="#ba9277",outline="")
-    for x in (104,223):
-        c.create_line(x,282,x-4,320,fill="#523e40",width=8)
-    c.create_rectangle(94,171,240,282,fill="#527a79",outline="")
-    c.create_oval(94,136,240,210,fill="#527a79",outline="")
-    c.create_rectangle(87,256,248,292,fill="#385d62",outline="")
-    for x in (82,222):
-        c.create_oval(x,224,x+30,266,fill="#749590",outline="")
-    c.create_line(288,120,288,285,fill="#d7ad88",width=4)
-    c.create_polygon(266,82,310,82,324,127,253,127,fill="#e9bf88")
-    c.create_oval(267,281,309,290,fill="#6a4b47",outline="")
-
-
 class Beagle:
     def __init__(self, root, path=PROFILE):
         self.root, self.path = root, path
         self.state = load(path)
         self.history, self.results = [], queue.Queue()
         self.busy = self.away = False
-        self.anchor = (0,0)
+        self.anchor = None
+        self.trip = None
+        self.last_touch = self.last_activity = time.monotonic()
+        self.touch_count = 0
+        self.reaction = ""
+        self.until = self.focus_end = 0
+        art = Path(__file__).with_name("art")
+        self.art = {name: tk.PhotoImage(master=root, file=str(art / (name + ".png")))
+                    for name in ("room", "idle", "happy")}
         root.title("Beagle · Комната Бигги")
         root.configure(bg=PAPER)
         tk.Label(root,text="Beagle",font=("Georgia",24,"bold"),fg=INK,bg=PAPER).pack(anchor="w",padx=20,pady=(12,2))
@@ -126,10 +106,12 @@ class Beagle:
         body.pack(fill="both",expand=True,padx=16,pady=(4,16))
         left = tk.Frame(body,bg=PAPER)
         left.pack(side="left",fill="y",padx=(0,14))
-        self.scene = tk.Canvas(left,width=344,height=342,highlightthickness=0)
+        self.scene = tk.Canvas(left,width=430,height=430,highlightthickness=0)
         self.scene.pack()
-        room(self.scene)
+        self.scene.create_image(0, 0, anchor="nw", image=self.art["room"])
+        self.scene.tag_bind("ghost", "<Button-1>", lambda e: self.touch())
         ttk.Button(left,text="Выпустить Бигги на рабочий стол",command=self.fly).pack(fill="x",pady=10)
+        ttk.Label(left,text="Касание — реакция Бигги  ·  Правая кнопка в полёте — домой").pack()
         tabs = ttk.Notebook(body)
         tabs.pack(side="left",fill="both",expand=True)
         chat, task, style = [ttk.Frame(tabs,padding=12) for _ in range(3)]
@@ -157,6 +139,8 @@ class Beagle:
             self.fields[key] = entry
         ttk.Button(task,text="Запомнить",command=self.remember).pack(fill="x",pady=(16,3))
         ttk.Button(task,text="Забыть дело и заметку",command=self.forget).pack(fill="x")
+        self.focus_btn = ttk.Button(task,text="Сосредоточиться на 25 минут",command=self.toggle_focus)
+        self.focus_btn.pack(fill="x",pady=6)
         self.status = ttk.Label(task,text="",wraplength=260)
         self.status.pack(anchor="w",pady=8)
         for key,label,choices in (("skin","Наряд Бигги",SKINS),("mood","Характер",MOODS)):
@@ -172,7 +156,7 @@ class Beagle:
         bg = "#fd00fd" if sys.platform=="win32" else "#29384f"
         if sys.platform=="win32":
             self.pet.attributes("-transparentcolor",bg)
-        self.float = tk.Canvas(self.pet,width=140,height=160,bg=bg,highlightthickness=0,cursor="hand2")
+        self.float = tk.Canvas(self.pet,width=214,height=220,bg=bg,highlightthickness=0,cursor="hand2")
         self.float.pack()
         self.float.bind("<ButtonPress-1>",self.press)
         self.float.bind("<B1-Motion>",self.drag)
@@ -226,44 +210,132 @@ class Beagle:
                 self.results.put((prompt,"Не получил ответ Ollama. Проверь, запущена ли модель с указанным именем. Кнопка «На чём я остановился?» работает автономно.",False))
         threading.Thread(target=worker,daemon=True).start()
 
+    def toggle_focus(self):
+        if self.focus_end:
+            self.focus_end = 0
+            self.focus_btn.configure(text="Сосредоточиться на 25 минут")
+        else:
+            self.focus_end = time.monotonic() + 25 * 60
+            self.focus_btn.configure(text="Отменить таймер")
+            self.status.configure(text="Бигги напомнит о перерыве через 25 минут.")
+    
+    def respond(self, kind, words, now):
+        self.reaction = kind
+        self.words = words
+        self.until = now + 3.3
+
+    def touch(self):
+        now = time.monotonic()
+        self.touch_count = self.touch_count + 1 if now-self.last_touch < 2.0 else 1
+        self.last_touch = self.last_activity = now
+        mood = self.state["mood"]
+        if self.touch_count >= 3:
+            phrase = {"Деловой":"Минутку, я занят!", "Спокойный":"Эй, не надо трогать!", "Игривый":"Всё, щекотно! Улечу!"}[mood]
+            self.respond("dodge", phrase, now)
+            if self.away:
+                self.start_trip(now, dodge=True)
+        else:
+            phrase = {"Деловой":"Рад тебя видеть.", "Спокойный":"Привет! Я рядом.", "Игривый":"Хи-хи, щекотно!"}[mood]
+            self.respond("happy", phrase, now)
+
+    def start_trip(self, now, dodge=False):
+        x, y = self.pet.winfo_x(), self.pet.winfo_y()
+        w = max(0, self.root.winfo_screenwidth()-214)
+        h = max(0, self.root.winfo_screenheight()-220)
+        dx = (1 if x < w/2 else -1) * 175 if dodge else random.choice((-1,1))*random.randint(60,190)
+        dy = -52 if dodge else random.randint(-70,70)
+        self.trip = (now, 0.65 if dodge else 3.2, x, y, max(0,min(w,x+dx)), max(0,min(h,y+dy)))
+
     def fly(self):
+        now = time.monotonic()
         self.away = True
+        self.last_activity = now
+        self.next_flight = now + 1
+        self.trip = self.anchor = None
         self.root.withdraw()
-        self.pet.geometry(f"+{max(0,self.root.winfo_screenwidth()-190)}+150")
+        self.pet.geometry(f"+{max(0,self.root.winfo_screenwidth()-230)}+150")
         self.pet.deiconify()
         self.pet.lift()
+        self.respond("happy", "Полетаем?", now)
 
     def home(self):
         self.away = False
+        self.trip = self.anchor = None
+        self.last_activity = time.monotonic()
         self.pet.withdraw()
         self.root.deiconify()
         self.root.lift()
 
     def press(self,e):
         self.anchor = e.x_root,e.y_root,self.pet.winfo_x(),self.pet.winfo_y()
+        self.trip = None
+        self.last_activity = time.monotonic()
         self.moved = False
 
     def drag(self,e):
+        if self.anchor is None:
+            return
         ax,ay,x,y = self.anchor
         dx,dy = e.x_root-ax,e.y_root-ay
         if self.moved or abs(dx)+abs(dy)>5:
             self.moved = True
-            x = max(0,min(x+dx,self.root.winfo_screenwidth()-140))
-            y = max(0,min(y+dy,self.root.winfo_screenheight()-160))
+            x = max(0,min(x+dx,self.root.winfo_screenwidth()-214))
+            y = max(0,min(y+dy,self.root.winfo_screenheight()-220))
             self.pet.geometry(f"+{x}+{y}")
 
     def release(self,e):
+        if self.anchor is None:
+            return
+        self.anchor = None
+        self.next_flight = time.monotonic() + 4
         if not self.moved:
-            self.home()
+            self.touch()
 
-    def tick(self):
-        phase = time.monotonic()*1.7
+    def animate(self, now):
+        if self.focus_end and now >= self.focus_end:
+            self.toggle_focus()
+            self.status.configure(text="25 минут прошли. Пора сделать паузу.")
+            self.say("Бигги", "Пора сделать паузу. Запишем следующий шаг?")
+            self.respond("happy", "Время передохнуть!", now)
+        quiet_for = now - self.last_activity
+        if self.away and self.anchor is None:
+            if quiet_for >= 600 and not self.focus_end:
+                self.home()
+                self.respond("rest", "Я пока к себе, за чаем.", now)
+            elif self.trip:
+                start, duration, x, y, end_x, end_y = self.trip
+                t = min(1, (now-start)/duration)
+                ease = t*t*(3-2*t)
+                self.pet.geometry(f"+{round(x+(end_x-x)*ease)}+{round(y+(end_y-y)*ease)}")
+                if t >= 1:
+                    self.trip = None
+                    self.next_flight = now + random.uniform(3,7)
+            elif now >= self.next_flight and quiet_for < 300 and not self.focus_end:
+                self.start_trip(now)
+        phase = now * 1.7
         target = self.float if self.away else self.scene
         target.delete("ghost")
-        if self.away:
-            ghost(target,69+6*math.sin(phase*.45),89,self.state["skin"],phase)
-        else:
-            ghost(target,166,221,self.state["skin"],phase,tea=True)
+        reacting = now < self.until
+        happy = reacting and self.reaction == "happy"
+        dodge = reacting and self.reaction == "dodge"
+        x, y = (107,145) if self.away else (211,219)
+        y += math.sin(phase)*(5 if self.away else 1.5)
+        if happy:
+            y -= abs(math.sin(phase*3))*6
+        if dodge:
+            x += math.sin(phase*5)*7
+            if not self.away:
+                y -= 15
+        ghost(target,x,y,self.state["skin"],phase,self.art["happy" if happy else "idle"],tea=not self.away and not dodge)
+        if reacting:
+            label = target.create_text(x, y-83, text=self.words, font=("TkDefaultFont",10,"bold"),
+                                       fill="#162e44", tags="ghost")
+            l,t,r,b = target.bbox(label)
+            backing = target.create_rectangle(l-5,t-4,r+5,b+4,fill="#e3faff",outline="#83bfd1",tags="ghost")
+            target.tag_lower(backing,label)
+
+    def tick(self):
+        self.animate(time.monotonic())
         try:
             prompt,reply,success = self.results.get_nowait()
         except queue.Empty:

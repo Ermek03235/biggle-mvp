@@ -1,2 +1,2 @@
 @echo off
-call "%~dp0apps\desktop\Start-Beagle.cmd"
+call "%~dp0Start-Biggle.cmd" %*

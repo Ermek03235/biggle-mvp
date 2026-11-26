@@ -1,4 +1,4 @@
-"""Beagle desktop companion. Python 3.10+, standard library only."""
+"""Biggle desktop companion. Python 3.10+, standard library only."""
 import json
 import math
 import os
@@ -16,7 +16,11 @@ from urllib.request import Request, urlopen
 SKINS = {"Облачко": "#b4cbe9", "Шарф": "#e28c67", "Звездочёт": "#9095dc"}
 MOODS = {"Спокойный": "Давай без спешки.", "Деловой": "К делу.", "Игривый": "Ловлю мысль!"}
 DEFAULT = dict(skin="Облачко", mood="Спокойный", task="", step="", note="")
-PROFILE = Path(os.getenv("LOCALAPPDATA") or Path.home()) / "Beagle" / "profile.json"
+PROFILE_ROOT = Path(os.getenv("LOCALAPPDATA") or Path.home())
+PROFILE = PROFILE_ROOT / "Biggle" / "profile.json"
+LEGACY_PROFILE = PROFILE_ROOT / "Beagle" / "profile.json"
+if not PROFILE.exists() and LEGACY_PROFILE.is_file():
+    PROFILE = LEGACY_PROFILE
 INK, PAPER, MUTED = "#243349", "#fff8ea", "#657585"
 
 
@@ -84,7 +88,7 @@ def ghost(c, x, y, skin, phase, sprite, tea=False):
             c.create_line(x+22+offset,y+6-lift,x+19+offset,y-lift,x+25+offset,y-8-lift,smooth=True,fill="#cbd9d5",tags="ghost")
 
 
-class Beagle:
+class Biggle:
     def __init__(self, root, path=PROFILE):
         self.root, self.path = root, path
         self.state = load(path)
@@ -99,9 +103,9 @@ class Beagle:
         art = Path(__file__).with_name("art")
         self.art = {name: tk.PhotoImage(master=root, file=str(art / (name + ".png")))
                     for name in ("room", "idle", "happy")}
-        root.title("Beagle · Комната Бигги")
+        root.title("Biggle · Комната Бигги")
         root.configure(bg=PAPER)
-        tk.Label(root,text="Beagle",font=("Georgia",24,"bold"),fg=INK,bg=PAPER).pack(anchor="w",padx=20,pady=(12,2))
+        tk.Label(root,text="Biggle",font=("Georgia",24,"bold"),fg=INK,bg=PAPER).pack(anchor="w",padx=20,pady=(12,2))
         body = tk.Frame(root,bg=PAPER)
         body.pack(fill="both",expand=True,padx=16,pady=(4,16))
         left = tk.Frame(body,bg=PAPER)
@@ -128,7 +132,7 @@ class Beagle:
         self.sendbtn.pack(fill="x",pady=3)
         ttk.Label(chat,text="Модель Ollama на этом компьютере").pack(anchor="w")
         self.model = ttk.Entry(chat)
-        self.model.insert(0,os.getenv("BEAGLE_MODEL","qwen3:4b-instruct"))
+        self.model.insert(0,os.getenv("BIGGLE_MODEL") or os.getenv("BEAGLE_MODEL","qwen3:4b-instruct"))
         self.model.pack(fill="x")
         self.fields = {}
         for key,label in (("task","Какое дело продолжим?"),("step","С какого шага начать?"),("note","Что Бигги стоит помнить о тебе?")):
@@ -170,14 +174,14 @@ class Beagle:
         try:
             save(self.path,state)
         except OSError as err:
-            messagebox.showerror("Beagle",f"Не удалось сохранить профиль: {err}")
+            messagebox.showerror("Biggle",f"Не удалось сохранить профиль: {err}")
             return False
         self.state = state
         return True
 
     def remember(self):
         if self.persist({k:e.get().strip() for k,e in self.fields.items()}):
-            self.status.configure(text="Запомнил. Можно закрыть Beagle и продолжить завтра.")
+            self.status.configure(text="Запомнил. Можно закрыть Biggle и продолжить завтра.")
 
     def forget(self):
         if self.persist(dict(task="",step="",note="")):
@@ -351,5 +355,5 @@ class Beagle:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    Beagle(root)
+    Biggle(root)
     root.mainloop()
